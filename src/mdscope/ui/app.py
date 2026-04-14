@@ -10,11 +10,12 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from rich.text import Text
 
 from mdscope.adapters.mermaid_cli import MermaidCliAdapter
 from mdscope.core.capabilities import detect_terminal_capabilities
 from mdscope.core.markdown_parser import parse_markdown_document
-from mdscope.core.models import SearchResult
+from mdscope.core.models import ProjectTreeNode, SearchResult
 from mdscope.core.project_loader import resolve_project_context
 from mdscope.renderers.markdown_renderer import render_empty_preview, render_markdown_preview
 from mdscope.services.file_watcher import FileWatcher
@@ -64,6 +65,9 @@ class MDScopeApp(App[None]):
         ("/", "focus_search", "Search"),
         ("tab", "focus_next_panel", "Next panel"),
         ("shift+tab", "focus_previous_panel", "Prev panel"),
+        ("enter", "activate_explorer_selection", "Open/toggle"),
+        ("right", "expand_explorer_directory", "Expand dir"),
+        ("left", "collapse_explorer_directory", "Collapse dir"),
         ("r", "refresh_document", "Refresh"),
         ("f", "show_full_document", "Full doc"),
         ("escape", "clear_search", "Clear search"),
@@ -87,11 +91,13 @@ class MDScopeApp(App[None]):
         self.reload_timer: Timer | None = None
         self._suppress_explorer_selection = False
         self._suppress_sidebar_selection = False
+        self.expanded_directories = {self.project.root}
         self.parsed_document = (
             parse_markdown_document(self.active_document.path)
             if self.active_document is not None
             else None
         )
+        self._expand_active_document_ancestors()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -114,16 +120,12 @@ class MDScopeApp(App[None]):
         sidebar = self.query_one("#sidebar", ListView)
         sidebar.border_title = "TOC"
 
-        explorer.clear()
-        for document in self.project.documents:
-            explorer.append(ListItem(Label(str(document.relative_path)), name=str(document.path)))
-
+        self._refresh_explorer_list()
         self._refresh_panels()
         explorer.focus()
         self.file_watcher.start()
 
         if self.active_document is not None:
-            self._set_explorer_index(explorer, self.project.documents.index(self.active_document))
             self._set_sidebar_index(sidebar, 0)
 
     def on_unmount(self) -> None:
@@ -137,18 +139,7 @@ class MDScopeApp(App[None]):
             return
         if event.item.name is None:
             return
-        selected_path = Path(event.item.name)
-        self.active_document = next(
-            (document for document in self.project.documents if document.path == selected_path),
-            None,
-        )
-        self.active_heading_anchor = None
-        self.parsed_document = (
-            parse_markdown_document(self.active_document.path)
-            if self.active_document is not None
-            else None
-        )
-        self._refresh_panels()
+        self._activate_explorer_item(event.item.name)
 
     @on(ListView.Selected, "#sidebar")
     def handle_sidebar_selected(self, event: ListView.Selected) -> None:
@@ -209,6 +200,54 @@ class MDScopeApp(App[None]):
         ]
         self._cycle_focus(widgets, direction=-1)
 
+    def action_activate_explorer_selection(self) -> None:
+        """Toggle the selected directory or open the selected file."""
+        if self.focused is not self.query_one("#explorer", ListView):
+            return
+        explorer = self.query_one("#explorer", ListView)
+        if explorer.index is None or explorer.index < 0 or explorer.index >= len(explorer.children):
+            return
+        selected_item = list(explorer.children)[explorer.index]
+        if selected_item.name is None:
+            return
+        self._activate_explorer_item(selected_item.name)
+
+    def action_expand_explorer_directory(self) -> None:
+        """Expand the selected directory when the explorer is focused."""
+        if self.focused is not self.query_one("#explorer", ListView):
+            return
+        item_name = self._get_selected_explorer_name()
+        if item_name is None or not item_name.startswith("dir:"):
+            return
+        directory_path = Path(item_name.removeprefix("dir:"))
+        if directory_path in self.expanded_directories:
+            return
+        self.expanded_directories.add(directory_path)
+        self._refresh_explorer_list(selected_name=item_name)
+
+    def action_collapse_explorer_directory(self) -> None:
+        """Collapse the selected directory or its parent when the explorer is focused."""
+        if self.focused is not self.query_one("#explorer", ListView):
+            return
+        item_name = self._get_selected_explorer_name()
+        if item_name is None:
+            return
+        if item_name.startswith("dir:"):
+            directory_path = Path(item_name.removeprefix("dir:"))
+            if directory_path in self.expanded_directories and directory_path != self.project.root:
+                self.expanded_directories.discard(directory_path)
+                self._refresh_explorer_list(selected_name=item_name)
+                return
+        if item_name.startswith("file:"):
+            node_path = Path(item_name.removeprefix("file:"))
+        else:
+            node_path = Path(item_name.removeprefix("dir:"))
+        parent = node_path.parent
+        if parent == self.project.root:
+            return
+        self.expanded_directories.discard(parent)
+        self._refresh_explorer_list(selected_name=f"dir:{parent}")
+
     def action_refresh_document(self) -> None:
         """Reparse the active document and rebuild search state."""
         self._reload_project_state()
@@ -234,13 +273,11 @@ class MDScopeApp(App[None]):
         )
         if self.active_document is None:
             return
+        self._expand_active_document_ancestors()
         self.active_heading_anchor = result.anchor
         self.parsed_document = parse_markdown_document(self.active_document.path)
         explorer = self.query_one("#explorer", ListView)
-        for index, document in enumerate(self.project.documents):
-            if document.path == result.path:
-                self._set_explorer_index(explorer, index)
-                break
+        self._set_explorer_selection_by_path(explorer, result.path)
         self._refresh_panels()
 
     def _handle_filesystem_change(self, changed_path: Path) -> None:
@@ -278,6 +315,7 @@ class MDScopeApp(App[None]):
             self.parsed_document = None
             self.active_heading_anchor = None
         else:
+            self._expand_active_document_ancestors()
             self.parsed_document = parse_markdown_document(self.active_document.path)
             if self.active_heading_anchor is not None and self.parsed_document is not None:
                 anchors = {heading.anchor for heading in self.parsed_document.headings}
@@ -292,17 +330,17 @@ class MDScopeApp(App[None]):
         self._refresh_explorer_list()
         self._refresh_panels()
 
-    def _refresh_explorer_list(self) -> None:
+    def _refresh_explorer_list(self, *, selected_name: str | None = None) -> None:
         explorer = self.query_one("#explorer", ListView)
         explorer.clear()
-        for document in self.project.documents:
-            explorer.append(ListItem(Label(str(document.relative_path)), name=str(document.path)))
+        for node, depth in self._iter_visible_tree_nodes():
+            explorer.append(ListItem(Label(self._format_tree_label(node, depth)), name=self._node_item_name(node)))
+        if selected_name is not None:
+            self._set_explorer_selection_by_name(explorer, selected_name)
+            return
         if self.active_document is None:
             return
-        for index, document in enumerate(self.project.documents):
-            if document.path == self.active_document.path:
-                self._set_explorer_index(explorer, index)
-                break
+        self._set_explorer_selection_by_path(explorer, self.active_document.path)
 
     def _refresh_panels(self) -> None:
         preview = self.query_one("#preview", Static)
@@ -390,3 +428,94 @@ class MDScopeApp(App[None]):
             sidebar.index = index
         finally:
             self._suppress_sidebar_selection = False
+
+    def _activate_explorer_item(self, item_name: str) -> None:
+        if item_name.startswith("dir:"):
+            directory_path = Path(item_name.removeprefix("dir:"))
+            if directory_path in self.expanded_directories:
+                if directory_path != self.project.root:
+                    self.expanded_directories.discard(directory_path)
+            else:
+                self.expanded_directories.add(directory_path)
+            self._refresh_explorer_list(selected_name=item_name)
+            return
+        if not item_name.startswith("file:"):
+            return
+        selected_path = Path(item_name.removeprefix("file:"))
+        self.active_document = next(
+            (document for document in self.project.documents if document.path == selected_path),
+            None,
+        )
+        self.active_heading_anchor = None
+        self.parsed_document = (
+            parse_markdown_document(self.active_document.path)
+            if self.active_document is not None
+            else None
+        )
+        self._refresh_panels()
+
+    def _iter_visible_tree_nodes(self) -> list[tuple[ProjectTreeNode, int]]:
+        visible_nodes: list[tuple[ProjectTreeNode, int]] = []
+
+        def visit(node: ProjectTreeNode, depth: int) -> None:
+            for child in node.children:
+                visible_nodes.append((child, depth))
+                if child.kind == "directory" and child.path in self.expanded_directories:
+                    visit(child, depth + 1)
+
+        visit(self.project.tree, 0)
+        return visible_nodes
+
+    def _format_tree_label(self, node: ProjectTreeNode, depth: int) -> Text:
+        label = Text()
+        indent = "  " * depth
+        if indent:
+            label.append(indent, style="dim")
+        if node.kind == "directory":
+            icon = "▾" if node.path in self.expanded_directories else "▸"
+            label.append(f"{icon} ", style="bright_black")
+            label.append(f"{node.name}/", style=self._directory_style(depth))
+            return label
+        label.append("• ", style="bright_black")
+        file_style = "bright_white" if depth == 0 else "white"
+        label.append(node.name, style=file_style)
+        return label
+
+    def _node_item_name(self, node: ProjectTreeNode) -> str:
+        prefix = "dir" if node.kind == "directory" else "file"
+        return f"{prefix}:{node.path}"
+
+    def _directory_style(self, depth: int) -> str:
+        if depth == 0:
+            return "bold cyan"
+        if depth == 1:
+            return "blue"
+        return "green"
+
+    def _set_explorer_selection_by_path(self, explorer: ListView, path: Path) -> None:
+        target_name = f"file:{path}"
+        self._set_explorer_selection_by_name(explorer, target_name)
+
+    def _set_explorer_selection_by_name(self, explorer: ListView, item_name: str) -> None:
+        target_name = item_name
+        for index, item in enumerate(list(explorer.children)):
+            if item.name == target_name:
+                self._set_explorer_index(explorer, index)
+                break
+
+    def _expand_active_document_ancestors(self) -> None:
+        if self.active_document is None:
+            return
+        for ancestor in self.active_document.path.parents:
+            if ancestor == self.project.root:
+                self.expanded_directories.add(ancestor)
+                break
+            if self.project.root in ancestor.parents:
+                self.expanded_directories.add(ancestor)
+
+    def _get_selected_explorer_name(self) -> str | None:
+        explorer = self.query_one("#explorer", ListView)
+        if explorer.index is None or explorer.index < 0 or explorer.index >= len(explorer.children):
+            return None
+        selected_item = list(explorer.children)[explorer.index]
+        return selected_item.name

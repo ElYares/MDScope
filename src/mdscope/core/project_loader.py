@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from mdscope.core.models import ProjectContext, ProjectDocument
+from mdscope.core.models import ProjectContext, ProjectDocument, ProjectTreeNode
 
 MARKDOWN_SUFFIXES = {".md", ".markdown", ".mdown"}
+
+
+@dataclass
+class _TreeBuilderNode:
+    name: str
+    path: Path
+    kind: str
+    children: dict[str, "_TreeBuilderNode"] = field(default_factory=dict)
 
 
 def is_markdown_file(path: Path) -> bool:
@@ -30,7 +39,12 @@ def resolve_project_context(target: Path) -> ProjectContext:
         root = target
         documents = discover_markdown_files(root)
         initial_document = documents[0] if documents else None
-        return ProjectContext(root=root, documents=documents, initial_document=initial_document)
+        return ProjectContext(
+            root=root,
+            documents=documents,
+            tree=build_project_tree(root, documents),
+            initial_document=initial_document,
+        )
 
     root = target.parent
     documents = discover_markdown_files(root)
@@ -43,7 +57,12 @@ def resolve_project_context(target: Path) -> ProjectContext:
         (document for document in deduped_documents if document.path == target),
         deduped_documents[0] if deduped_documents else None,
     )
-    return ProjectContext(root=root, documents=deduped_documents, initial_document=initial_document)
+    return ProjectContext(
+        root=root,
+        documents=deduped_documents,
+        tree=build_project_tree(root, deduped_documents),
+        initial_document=initial_document,
+    )
 
 
 def _dedupe_documents(
@@ -57,3 +76,32 @@ def _dedupe_documents(
         seen.add(document.path)
         unique_documents.append(document)
     return tuple(unique_documents)
+
+
+def build_project_tree(root: Path, documents: tuple[ProjectDocument, ...]) -> ProjectTreeNode:
+    """Build a hierarchical tree of directories and Markdown files."""
+    builder_root = _TreeBuilderNode(name=root.name or str(root), path=root, kind="directory")
+    for document in documents:
+        current = builder_root
+        parts = document.relative_path.parts
+        current_path = root
+        for index, part in enumerate(parts):
+            current_path = current_path / part
+            kind = "file" if index == len(parts) - 1 else "directory"
+            if part not in current.children:
+                current.children[part] = _TreeBuilderNode(name=part, path=current_path, kind=kind)
+            current = current.children[part]
+    return _freeze_tree(builder_root)
+
+
+def _freeze_tree(node: _TreeBuilderNode) -> ProjectTreeNode:
+    sorted_children = sorted(
+        node.children.values(),
+        key=lambda child: (child.kind != "directory", child.name.lower()),
+    )
+    return ProjectTreeNode(
+        name=node.name,
+        path=node.path,
+        kind=node.kind,
+        children=tuple(_freeze_tree(child) for child in sorted_children),
+    )

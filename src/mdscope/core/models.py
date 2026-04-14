@@ -20,7 +20,18 @@ class ProjectContext:
 
     root: Path
     documents: tuple[ProjectDocument, ...]
+    tree: "ProjectTreeNode"
     initial_document: ProjectDocument | None
+
+
+@dataclass(frozen=True)
+class ProjectTreeNode:
+    """A hierarchical node in the project explorer."""
+
+    name: str
+    path: Path
+    kind: str
+    children: tuple["ProjectTreeNode", ...] = ()
 
 
 @dataclass(frozen=True)

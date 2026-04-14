@@ -44,3 +44,21 @@ def test_resolve_project_context_from_file_keeps_selected_document(tmp_path: Pat
     assert context.root == tmp_path
     assert context.initial_document is not None
     assert context.initial_document.path == guide
+
+
+def test_resolve_project_context_builds_hierarchical_tree(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("# Guide\n", encoding="utf-8")
+    (tmp_path / "docs" / "nested").mkdir()
+    (tmp_path / "docs" / "nested" / "deep.md").write_text("# Deep\n", encoding="utf-8")
+
+    context = resolve_project_context(tmp_path)
+
+    assert [child.name for child in context.tree.children] == ["docs", "README.md"]
+    docs_node = context.tree.children[0]
+    assert docs_node.kind == "directory"
+    assert [child.name for child in docs_node.children] == ["nested", "guide.md"]
+    nested_node = docs_node.children[0]
+    assert nested_node.kind == "directory"
+    assert [child.name for child in nested_node.children] == ["deep.md"]
