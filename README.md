@@ -13,7 +13,8 @@ El proyecto ya soporta:
 - TOC navegable,
 - búsqueda local con SQLite FTS5,
 - hot reload con `watchdog`,
-- fallback para Mermaid, charts e imágenes.
+- render Mermaid opcional via `mmdc`,
+- fallback para charts e imágenes.
 
 ## Uso
 
@@ -52,6 +53,41 @@ Si actualizas el repo y quieres reinstalar la version global:
 ```bash
 uv tool install --reinstall --from /home/elyarestark/develop/MDScope MDScope
 ```
+
+## Mermaid opcional
+
+Si quieres render Mermaid real, instala Mermaid CLI:
+
+```bash
+npm install -g @mermaid-js/mermaid-cli
+```
+
+Si ademas tienes `chafa`, MDScope puede mostrar el diagrama generado directamente en terminal. Sin `mmdc`, los bloques Mermaid siguen degradando a un fallback legible.
+
+## Charts opcionales
+
+Si quieres render real para bloques `chart`, instala las dependencias de charts:
+
+```bash
+uv sync --extra charts
+```
+
+Formato inicial soportado:
+
+````md
+```chart
+title: Requests
+type: line
+x: 1,2,3,4
+y: 12,18,9,22
+xlabel: Dia
+ylabel: Total
+```
+````
+
+Tipos soportados por ahora:
+- `line`
+- `bar`
 
 ## Atajos actuales
 

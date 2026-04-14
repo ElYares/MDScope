@@ -11,6 +11,7 @@ from textual.containers import Horizontal, Vertical
 from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
+from mdscope.adapters.mermaid_cli import MermaidCliAdapter
 from mdscope.core.capabilities import detect_terminal_capabilities
 from mdscope.core.markdown_parser import parse_markdown_document
 from mdscope.core.models import SearchResult
@@ -74,6 +75,7 @@ class MDScopeApp(App[None]):
         self.initial_target = initial_target
         self.project = resolve_project_context(initial_target)
         self.capabilities = detect_terminal_capabilities()
+        self.mermaid_adapter = MermaidCliAdapter()
         self.active_document = self.project.initial_document
         self.active_heading_anchor: str | None = None
         self.search_query = ""
@@ -319,6 +321,7 @@ class MDScopeApp(App[None]):
             self.parsed_document,
             self.capabilities,
             active_anchor=self.active_heading_anchor,
+            mermaid_adapter=self.mermaid_adapter,
         )
 
     def _refresh_sidebar_list(self, sidebar: ListView) -> None:
