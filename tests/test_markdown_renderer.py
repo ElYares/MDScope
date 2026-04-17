@@ -102,6 +102,57 @@ def test_render_markdown_preview_renders_chart_blocks(tmp_path: Path) -> None:
     assert isinstance(renderable, Group)
 
 
+def test_render_markdown_preview_renders_math_blocks(tmp_path: Path) -> None:
+    source = tmp_path / "README.md"
+    document = ProjectDocument(path=source, relative_path=Path("README.md"))
+    parsed = parse_markdown_text(
+        source,
+        "# Titulo\n\n```math\nREE = 10 \\times peso_{kg} + 6.25 \\times talla_{cm}\n```\n",
+    )
+
+    renderable = render_markdown_preview(
+        document,
+        parsed,
+        TerminalCapabilities(kitty_graphics=False, chafa_available=False),
+    )
+
+    assert isinstance(renderable, Group)
+
+
+def test_render_markdown_preview_renders_table_blocks(tmp_path: Path) -> None:
+    source = tmp_path / "README.md"
+    document = ProjectDocument(path=source, relative_path=Path("README.md"))
+    parsed = parse_markdown_text(
+        source,
+        "# Titulo\n\n```table\nMetodo|Formula|Inputs\nMifflin|10xkg|peso,talla\n```\n",
+    )
+
+    renderable = render_markdown_preview(
+        document,
+        parsed,
+        TerminalCapabilities(kitty_graphics=False, chafa_available=False),
+    )
+
+    assert isinstance(renderable, Group)
+
+
+def test_render_markdown_preview_renders_matrix_blocks(tmp_path: Path) -> None:
+    source = tmp_path / "README.md"
+    document = ProjectDocument(path=source, relative_path=Path("README.md"))
+    parsed = parse_markdown_text(
+        source,
+        "# Titulo\n\n```matrix\n1,2,3\n4,5,6\n```\n",
+    )
+
+    renderable = render_markdown_preview(
+        document,
+        parsed,
+        TerminalCapabilities(kitty_graphics=False, chafa_available=False),
+    )
+
+    assert isinstance(renderable, Group)
+
+
 def test_render_markdown_preview_replaces_images(tmp_path: Path) -> None:
     source = tmp_path / "README.md"
     document = ProjectDocument(path=source, relative_path=Path("README.md"))

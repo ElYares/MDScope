@@ -7,7 +7,7 @@ from typing import Any
 
 from textual import on
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 from rich.text import Text
@@ -20,6 +20,41 @@ from mdscope.core.project_loader import resolve_project_context
 from mdscope.renderers.markdown_renderer import render_empty_preview, render_markdown_preview
 from mdscope.services.file_watcher import FileWatcher
 from mdscope.services.search_index import SearchIndex
+
+
+class PreviewPane(VerticalScroll):
+    """Scrollable preview container with explicit keyboard controls."""
+
+    BINDINGS = [
+        ("up,k", "cursor_up", "Up"),
+        ("down,j", "cursor_down", "Down"),
+        ("pageup", "page_up", "Page up"),
+        ("pagedown", "page_down", "Page down"),
+        ("home", "scroll_home", "Top"),
+        ("end", "scroll_end", "Bottom"),
+    ]
+
+    def action_cursor_up(self) -> None:
+        self.scroll_relative(y=-3, animate=False)
+
+    def action_cursor_down(self) -> None:
+        self.scroll_relative(y=3, animate=False)
+
+    def action_page_up(self) -> None:
+        self.scroll_page_up(animate=False)
+
+    def action_page_down(self) -> None:
+        self.scroll_page_down(animate=False)
+
+    def action_scroll_home(self) -> None:
+        self.scroll_home(animate=False)
+
+    def action_scroll_end(self) -> None:
+        self.scroll_end(animate=False)
+
+
+class PreviewContent(Static):
+    """Rich renderable holder mounted inside the preview scroll container."""
 
 
 class MDScopeApp(App[None]):
@@ -50,6 +85,12 @@ class MDScopeApp(App[None]):
 
     #preview {
         width: 1fr;
+        overflow-y: auto;
+        overflow-x: auto;
+    }
+
+    #preview:focus {
+        border: round $accent;
     }
 
     #sidebar {
@@ -105,7 +146,8 @@ class MDScopeApp(App[None]):
             yield Input(placeholder="Buscar en el proyecto...", id="search-bar")
             with Horizontal(id="body"):
                 yield ListView(id="explorer", classes="panel")
-                yield Static("", id="preview", classes="panel")
+                with PreviewPane(id="preview", classes="panel"):
+                    yield PreviewContent("", id="preview-content")
                 yield ListView(id="sidebar", classes="panel")
         yield Footer()
 
@@ -116,7 +158,7 @@ class MDScopeApp(App[None]):
 
         explorer = self.query_one("#explorer", ListView)
         explorer.border_title = "Explorador"
-        self.query_one("#preview", Static).border_title = "Preview"
+        self.query_one("#preview", PreviewPane).border_title = "Preview"
         sidebar = self.query_one("#sidebar", ListView)
         sidebar.border_title = "TOC"
 
@@ -184,7 +226,7 @@ class MDScopeApp(App[None]):
         """Move focus between explorer, preview, sidebar and search."""
         widgets = [
             self.query_one("#explorer", ListView),
-            self.query_one("#preview", Static),
+            self.query_one("#preview", PreviewPane),
             self.query_one("#sidebar", ListView),
             self.query_one("#search-bar", Input),
         ]
@@ -194,7 +236,7 @@ class MDScopeApp(App[None]):
         """Move focus backwards between explorer, preview, sidebar and search."""
         widgets = [
             self.query_one("#explorer", ListView),
-            self.query_one("#preview", Static),
+            self.query_one("#preview", PreviewPane),
             self.query_one("#sidebar", ListView),
             self.query_one("#search-bar", Input),
         ]
@@ -343,10 +385,12 @@ class MDScopeApp(App[None]):
         self._set_explorer_selection_by_path(explorer, self.active_document.path)
 
     def _refresh_panels(self) -> None:
-        preview = self.query_one("#preview", Static)
+        preview = self.query_one("#preview", PreviewPane)
+        preview_content = self.query_one("#preview-content", PreviewContent)
         sidebar = self.query_one("#sidebar", ListView)
         sidebar.border_title = "Busqueda" if self.search_query.strip() else "TOC"
-        preview.update(self._build_preview_renderable())
+        preview_content.update(self._build_preview_renderable())
+        self._reset_preview_scroll(preview)
         self._refresh_sidebar_list(sidebar)
 
     def _build_preview_renderable(self) -> Any:
@@ -519,3 +563,7 @@ class MDScopeApp(App[None]):
             return None
         selected_item = list(explorer.children)[explorer.index]
         return selected_item.name
+
+    def _reset_preview_scroll(self, preview: PreviewPane | None = None) -> None:
+        active_preview = preview or self.query_one("#preview", PreviewPane)
+        active_preview.scroll_to(0, 0, animate=False, force=True)

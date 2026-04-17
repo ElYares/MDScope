@@ -43,12 +43,21 @@ def test_parse_markdown_classifies_special_fences(tmp_path: Path) -> None:
     source = tmp_path / "guide.md"
     parsed = parse_markdown_text(
         source_path=source,
-        raw_text="```mermaid\ngraph TD\nA-->B\n```\n\n```chart\nx: 1\n```\n",
+        raw_text=(
+            "```mermaid\ngraph TD\nA-->B\n```\n\n"
+            "```chart\nx: 1\n```\n\n"
+            "```math\nREE = 10 \\times peso_{kg}\n```\n\n"
+            "```table\nA|B\n1|2\n```\n\n"
+            "```matrix\n1,2\n3,4\n```\n"
+        ),
     )
 
-    assert [block.kind for block in parsed.blocks if block.kind in {"mermaid", "chart"}] == [
+    assert [block.kind for block in parsed.blocks if block.kind in {"mermaid", "chart", "math", "table", "matrix"}] == [
         "mermaid",
         "chart",
+        "math",
+        "table",
+        "matrix",
     ]
 
 

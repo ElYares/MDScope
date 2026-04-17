@@ -15,10 +15,12 @@ from mdscope.core.markdown_parser import extract_section_text
 from mdscope.core.models import ParsedDocument, ProjectDocument
 from mdscope.renderers.chart_renderer import ChartAdapter, render_chart_block
 from mdscope.renderers.image_renderer import render_image_placeholder
+from mdscope.renderers.math_renderer import render_math_block, replace_inline_math
 from mdscope.renderers.mermaid_renderer import MermaidAdapter, render_mermaid_block
+from mdscope.renderers.table_renderer import render_matrix_block, render_table_block
 
 _SPECIAL_BLOCK_PATTERN = re.compile(
-    r"```(?P<kind>mermaid|chart)[^\n]*\n(?P<body>.*?)\n```",
+    r"```(?P<kind>mermaid|chart|math|table|matrix)[^\n]*\n(?P<body>.*?)\n```",
     re.DOTALL,
 )
 
@@ -90,6 +92,7 @@ def _render_markdown_chunk(
     if not cleaned:
         return []
     cleaned = _replace_images(cleaned, capabilities)
+    cleaned = replace_inline_math(cleaned)
     return [_render_markdown(cleaned)]
 
 
@@ -115,6 +118,12 @@ def _render_special_block(
             capabilities,
             adapter=mermaid_adapter,
         )
+    if kind == "math":
+        return render_math_block(body)
+    if kind == "table":
+        return render_table_block(body)
+    if kind == "matrix":
+        return render_matrix_block(body)
     return render_chart_block(body, adapter=chart_adapter)
 
 

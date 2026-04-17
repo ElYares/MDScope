@@ -16,6 +16,9 @@ _parser = MarkdownIt("commonmark")
 _SPECIAL_FENCE_KINDS = {
     "mermaid": "mermaid",
     "chart": "chart",
+    "math": "math",
+    "table": "table",
+    "matrix": "matrix",
 }
 
 
