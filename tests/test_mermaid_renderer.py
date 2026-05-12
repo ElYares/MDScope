@@ -3,11 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from rich.console import Group
 from rich.panel import Panel
 
 from mdscope.adapters.mermaid_cli import MermaidRenderResult
 from mdscope.core.capabilities import TerminalCapabilities
-from mdscope.renderers.mermaid_renderer import render_mermaid_block
+from mdscope.renderers.mermaid_renderer import (
+    _build_textual_summary,
+    render_mermaid_block,
+)
 
 
 @dataclass
@@ -45,4 +49,25 @@ def test_render_mermaid_block_returns_generated_panel_without_image_terminal_sup
         adapter=adapter,
     )
 
-    assert isinstance(renderable, Panel)
+    assert isinstance(renderable, Group)
+    assert "Presiona `o` para abrir la imagen real." in str(renderable.renderables[0].renderable)
+
+
+def test_build_textual_summary_for_flowchart_extracts_edges() -> None:
+    summary = _build_textual_summary(
+        "flowchart LR\nA[CSV ventas POS] --> B[Airbyte o carga Python]\nB --> C[Landing raw]\n"
+    )
+
+    assert "Flowchart LR" in summary
+    assert "CSV ventas POS -> Airbyte o carga Python" in summary
+    assert "Airbyte o carga Python -> Landing raw" in summary
+
+
+def test_build_textual_summary_for_pie_extracts_segments() -> None:
+    summary = _build_textual_summary(
+        'pie title Distribucion\n"Droplet" : 417.72\n"Spaces" : 87.03\n'
+    )
+
+    assert "Pie title Distribucion" in summary
+    assert "- Droplet: 417.72" in summary
+    assert "- Spaces: 87.03" in summary

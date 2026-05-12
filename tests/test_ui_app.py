@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from textual.widgets import Input, ListView
 
+from mdscope.adapters.mermaid_cli import MermaidRenderResult
 from mdscope.ui.app import MDScopeApp, PreviewPane
 
 
@@ -174,3 +175,44 @@ async def test_preview_can_receive_focus_for_scrolling(
 
         preview = app.query_one("#preview", PreviewPane)
         assert app.focused is preview
+
+
+def test_resolve_preview_asset_path_prefers_mermaid_artifact(tmp_path: Path, monkeypatch: Any) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_text("# Intro\n\n```mermaid\ngraph TD\nA-->B\n```\n", encoding="utf-8")
+    image_path = tmp_path / "diagram.png"
+    image_path.write_bytes(b"png")
+
+    class FakeMermaidAdapter:
+        def render_to_png(self, source: str) -> MermaidRenderResult:
+            return MermaidRenderResult(status="rendered", image_path=image_path)
+
+    app = MDScopeApp(initial_target=readme)
+    app.mermaid_adapter = FakeMermaidAdapter()
+    app.parsed_document = app.parsed_document
+
+    assert app._resolve_preview_asset_path() == image_path
+
+
+def test_resolve_preview_asset_path_returns_markdown_image(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    logo = assets / "logo.png"
+    logo.write_bytes(b"png")
+    readme = tmp_path / "README.md"
+    readme.write_text("# Intro\n\n![Logo](./assets/logo.png)\n", encoding="utf-8")
+
+    app = MDScopeApp(initial_target=readme)
+
+    assert app._resolve_preview_asset_path() == logo
+
+
+def test_viewer_command_uses_xdg_open_on_linux(tmp_path: Path, monkeypatch: Any) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_text("# Intro\n", encoding="utf-8")
+    app = MDScopeApp(initial_target=readme)
+
+    monkeypatch.setattr("mdscope.ui.app.sys.platform", "linux")
+    monkeypatch.setattr("mdscope.ui.app.shutil.which", lambda name: "/usr/bin/xdg-open")
+
+    assert app._viewer_command(readme) == ["/usr/bin/xdg-open", str(readme)]

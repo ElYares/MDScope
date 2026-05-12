@@ -14,7 +14,7 @@ from mdscope.core.capabilities import TerminalCapabilities
 from mdscope.core.markdown_parser import extract_section_text
 from mdscope.core.models import ParsedDocument, ProjectDocument
 from mdscope.renderers.chart_renderer import ChartAdapter, render_chart_block
-from mdscope.renderers.image_renderer import render_image_placeholder
+from mdscope.renderers.image_renderer import render_markdown_image
 from mdscope.renderers.math_renderer import render_math_block, replace_inline_math
 from mdscope.renderers.mermaid_renderer import MermaidAdapter, render_mermaid_block
 from mdscope.renderers.table_renderer import render_matrix_block, render_table_block
@@ -23,6 +23,7 @@ _SPECIAL_BLOCK_PATTERN = re.compile(
     r"```(?P<kind>mermaid|chart|math|table|matrix)[^\n]*\n(?P<body>.*?)\n```",
     re.DOTALL,
 )
+_IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<target>[^)]+)\)")
 
 
 def render_markdown_preview(
@@ -38,6 +39,7 @@ def render_markdown_preview(
     mode = "documento completo" if active_anchor is None else f"seccion: {active_anchor}"
     subtitle = Text(f"{len(parsed.headings)} headings • {mode}", style="dim")
     body_renderables = _build_body_renderables(
+        document.path,
         extract_section_text(parsed, active_anchor),
         capabilities,
         mermaid_adapter=mermaid_adapter,
@@ -56,6 +58,7 @@ def render_empty_preview(project_root: str) -> RenderableType:
 
 
 def _build_body_renderables(
+    source_path: Path,
     markdown_text: str,
     capabilities: TerminalCapabilities,
     *,
@@ -66,7 +69,7 @@ def _build_body_renderables(
     last_end = 0
     for match in _SPECIAL_BLOCK_PATTERN.finditer(markdown_text):
         prefix = markdown_text[last_end : match.start()]
-        renderables.extend(_render_markdown_chunk(prefix, capabilities))
+        renderables.extend(_render_markdown_chunk(source_path, prefix, capabilities))
         renderables.append(
             _render_special_block(
                 match.group("kind"),
@@ -78,22 +81,42 @@ def _build_body_renderables(
         )
         last_end = match.end()
     suffix = markdown_text[last_end:]
-    renderables.extend(_render_markdown_chunk(suffix, capabilities))
+    renderables.extend(_render_markdown_chunk(source_path, suffix, capabilities))
     if renderables:
         return renderables
     return [_render_markdown("")]
 
 
 def _render_markdown_chunk(
+    source_path: Path,
     markdown_text: str,
     capabilities: TerminalCapabilities,
 ) -> list[RenderableType]:
+    renderables: list[RenderableType] = []
+    last_end = 0
+    for match in _IMAGE_PATTERN.finditer(markdown_text):
+        prefix = markdown_text[last_end : match.start()]
+        renderables.extend(_render_text_segment(prefix))
+        renderables.append(
+            render_markdown_image(
+                match.group("target"),
+                source_path,
+                capabilities,
+                alt_text=match.group("alt") or None,
+            )
+        )
+        last_end = match.end()
+
+    suffix = markdown_text[last_end:]
+    renderables.extend(_render_text_segment(suffix))
+    return renderables
+
+
+def _render_text_segment(markdown_text: str) -> list[RenderableType]:
     cleaned = markdown_text.strip()
     if not cleaned:
         return []
-    cleaned = _replace_images(cleaned, capabilities)
-    cleaned = replace_inline_math(cleaned)
-    return [_render_markdown(cleaned)]
+    return [_render_markdown(replace_inline_math(cleaned))]
 
 
 def _render_markdown(markdown_text: str) -> Markdown:
@@ -125,21 +148,3 @@ def _render_special_block(
     if kind == "matrix":
         return render_matrix_block(body)
     return render_chart_block(body, adapter=chart_adapter)
-
-
-def _replace_images(markdown_text: str, capabilities: TerminalCapabilities) -> str:
-    pattern = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<target>[^)]+)\)")
-
-    def replacer(match: re.Match[str]) -> str:
-        alt_text = match.group("alt") or None
-        image_target = match.group("target")
-        panel = render_image_placeholder(image_target, capabilities, alt_text=alt_text)
-        return "\n".join(
-            [
-                f"> [Imagen detectada] {alt_text or Path(image_target).name}",
-                f"> Target: {image_target}",
-                f"> {panel.title}",
-            ]
-        )
-
-    return pattern.sub(replacer, markdown_text)

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +18,16 @@ from rich.text import Text
 
 from mdscope.adapters.mermaid_cli import MermaidCliAdapter
 from mdscope.core.capabilities import detect_terminal_capabilities
-from mdscope.core.markdown_parser import parse_markdown_document
+from mdscope.core.markdown_parser import extract_section_text, parse_markdown_document
 from mdscope.core.models import ProjectTreeNode, SearchResult
 from mdscope.core.project_loader import resolve_project_context
+from mdscope.renderers.image_renderer import resolve_image_path
 from mdscope.renderers.markdown_renderer import render_empty_preview, render_markdown_preview
 from mdscope.services.file_watcher import FileWatcher
 from mdscope.services.search_index import SearchIndex
+
+_MERMAID_BLOCK_PATTERN = re.compile(r"```mermaid[^\n]*\n(?P<body>.*?)\n```", re.DOTALL)
+_IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<target>[^)]+)\)")
 
 
 class PreviewPane(VerticalScroll):
@@ -111,6 +119,7 @@ class MDScopeApp(App[None]):
         ("left", "collapse_explorer_directory", "Collapse dir"),
         ("r", "refresh_document", "Refresh"),
         ("f", "show_full_document", "Full doc"),
+        ("o", "open_preview_asset", "Open image"),
         ("escape", "clear_search", "Clear search"),
         ("q", "quit", "Quit"),
     ]
@@ -301,6 +310,23 @@ class MDScopeApp(App[None]):
         if len(sidebar.children) > 0:
             self._set_sidebar_index(sidebar, 0)
         self._refresh_panels()
+
+    def action_open_preview_asset(self) -> None:
+        """Open the first image-like asset from the active preview using the OS viewer."""
+        asset_path = self._resolve_preview_asset_path()
+        if asset_path is None:
+            self._notify_user("No hay imagen o Mermaid abrible en el preview actual.", severity="warning")
+            return
+        if not asset_path.exists():
+            self._notify_user(f"No existe el archivo: {asset_path}", severity="error")
+            return
+        if not self._open_path_in_system_viewer(asset_path):
+            self._notify_user(
+                "No se encontro un visor compatible. Instala `xdg-open`, `open` o `start`.",
+                severity="error",
+            )
+            return
+        self._notify_user(f"Abriendo imagen: {asset_path.name}")
 
     def _activate_search_result(self, relative_key: str) -> None:
         result = next(
@@ -567,3 +593,51 @@ class MDScopeApp(App[None]):
     def _reset_preview_scroll(self, preview: PreviewPane | None = None) -> None:
         active_preview = preview or self.query_one("#preview", PreviewPane)
         active_preview.scroll_to(0, 0, animate=False, force=True)
+
+    def _resolve_preview_asset_path(self) -> Path | None:
+        if self.active_document is None or self.parsed_document is None:
+            return None
+        section_text = extract_section_text(self.parsed_document, self.active_heading_anchor)
+        candidates: list[tuple[int, str, str]] = []
+
+        for match in _MERMAID_BLOCK_PATTERN.finditer(section_text):
+            candidates.append((match.start(), "mermaid", match.group("body")))
+        for match in _IMAGE_PATTERN.finditer(section_text):
+            candidates.append((match.start(), "image", match.group("target")))
+
+        if not candidates:
+            return None
+
+        _, asset_kind, payload = min(candidates, key=lambda item: item[0])
+        if asset_kind == "mermaid":
+            result = self.mermaid_adapter.render_to_png(payload.strip())
+            return result.image_path if result.status == "rendered" else None
+
+        return resolve_image_path(payload, self.active_document.path)
+
+    def _open_path_in_system_viewer(self, path: Path) -> bool:
+        command = self._viewer_command(path)
+        if command is None:
+            return False
+        subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+
+    def _viewer_command(self, path: Path) -> list[str] | None:
+        if sys.platform == "darwin":
+            return ["open", str(path)]
+        if sys.platform.startswith("win"):
+            return ["cmd", "/c", "start", "", str(path)]
+        opener = shutil.which("xdg-open")
+        if opener is None:
+            return None
+        return [opener, str(path)]
+
+    def _notify_user(self, message: str, *, severity: str = "information") -> None:
+        notify = getattr(self, "notify", None)
+        if callable(notify):
+            notify(message, severity=severity)
